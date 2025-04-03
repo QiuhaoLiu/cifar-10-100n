@@ -1,8 +1,8 @@
 # -*- coding:utf-8 -*-
 import os
 # 指定物理GPU 1,2,3
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
-print("[INFO] Set CUDA_VISIBLE_DEVICES to 1,2,3 (avoid GPU0).")
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 
 import copy  # <-- 新增，用于深拷贝模型参数
 import torch
@@ -19,12 +19,55 @@ import pathlib
 from tqdm import tqdm
 import datetime
 
+import torchvision.transforms as transforms
+from PIL import Image    
+from torch.utils.data import Dataset, DataLoader    
+class MiniWebVisionDataset(Dataset):
+    def __init__(self, root_dir, split='train', transform=None):
+        self.root_dir = root_dir
+        self.split = split
+        self.transform = transform
+        self.data = []
+        
+        # 从文件夹加载图像路径和标签
+        split_dir = os.path.join(root_dir, split)
+        self.classes = sorted(os.listdir(split_dir))  # 假设有 50 个类别文件夹
+        for label, class_name in enumerate(self.classes):
+            class_dir = os.path.join(split_dir, class_name)
+            for img_name in os.listdir(class_dir):
+                img_path = os.path.join(class_dir, img_name)
+                self.data.append((img_path, label))
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        img_path, label = self.data[idx]
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+        return image, label,idx
+# 数据预处理
+train_transform = transforms.Compose([
+    transforms.RandomResizedCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+val_transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, default=0.1)
-parser.add_argument('--noise_type', type=str, default='noisy100', help='clean, aggre, worst, rand1, rand2, rand3, clean100, noisy100')
+parser.add_argument('--noise_type', type=str, default='worst', help='clean, aggre, worst, rand1, rand2, rand3, clean100, noisy100')
 parser.add_argument('--noise_path', type=str, default=None, help='path of CIFAR-10_human.pt')
-parser.add_argument('--dataset', type=str, default='cifar100', help='cifar10 or cifar100')
-parser.add_argument('--n_epoch', type=int, default=200, help='number of epochs for training each fold')
+parser.add_argument('--dataset', type=str, default='cifar10', help='cifar10 or cifar100')
+parser.add_argument('--n_epoch', type=int, default=100, help='number of epochs for training each fold')
 parser.add_argument('--seed', type=int, default=0)
 parser.add_argument('--num_workers', type=int, default=4)
 parser.add_argument('--k_folds', type=int, default=5, help='number of folds for cross-validation')
@@ -66,11 +109,11 @@ def main(args):
     # 用于存储最终预测概率
     output_file = os.path.join(
         args.output_dir_prob,
-        f"Best_model_GPT_{args.dataset}_trainset_pyx_{args.noise_type}_{args.k_folds}fold_{args.n_epoch}epoch.npy"
+        f"Best_model_{args.dataset}_trainset_pyx_{args.noise_type}_{args.k_folds}fold_{args.n_epoch}epoch.npy"
     )
     output_file_pred_label = os.path.join(
         args.output_dir_label,
-        f"Best_model_GPT_{args.dataset}_trainset_pyx_argmax_predicted_labels_{args.noise_type}_{args.k_folds}fold_{args.n_epoch}epoch.npy"
+        f"Best_model_{args.dataset}_argmax_predicted_labels_{args.noise_type}_{args.k_folds}fold_{args.n_epoch}epoch.npy"
     )
 
     # 加载数据集
@@ -79,12 +122,21 @@ def main(args):
             args.noise_path = './cifar-10-100n/data/CIFAR-10_human.pt'
         elif args.dataset == 'cifar100':
             args.noise_path = './cifar-10-100n/data/CIFAR-100_human.pt'
+        elif args.dataset == 'animal10n':
+            args.noise_path = './cifar-10-100n/data/ANIMAL-10N.pt'
+        elif args.dataset == 'miniwebvision':
+            args.noise_path = None
         else:
             raise NameError(f'Undefined dataset {args.dataset}')
 
     train_dataset, _, num_classes, num_training_samples = input_dataset(
         args.dataset, args.noise_type, args.noise_path, is_human=False
     )
+    # train_dataset = MiniWebVisionDataset(root_dir="../data/MINI-WEBVISION", split='train', transform=train_transform)
+    # test_dataset = MiniWebVisionDataset(root_dir="../data/MINI-WEBVISION", split='val', transform=val_transform)
+    # # 使用方案2加载数据集MiniWebVision
+    # num_training_samples = len(train_dataset.data)
+    # num_classes = 50
 
     # 初始化存储预测概率的数组
     pred_probs = np.zeros((num_training_samples, num_classes), dtype=np.float64)
@@ -105,8 +157,8 @@ def main(args):
         val_loader = DataLoader(val_subset, batch_size=128, shuffle=False, num_workers=args.num_workers)
 
         # 实例化模型（单卡），然后再封装 DataParallel
-        single_model = ResNet34(num_classes).cuda()
-        model = nn.DataParallel(single_model, device_ids=[0, 1, 2, 3])
+        single_model = ResNet18(num_classes=num_classes).cuda()
+        model = nn.DataParallel(single_model, device_ids=[0])
 
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=0.0005)
 

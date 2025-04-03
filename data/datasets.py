@@ -1,6 +1,7 @@
 import numpy as np 
 import torchvision.transforms as transforms
 from .cifar import CIFAR10, CIFAR100
+from .animal10n import Animal10N
 
 
 
@@ -27,6 +28,19 @@ test_cifar100_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
 ])
+# 仍然在 dataset.py 里
+train_animal10n_transform = transforms.Compose([
+    transforms.RandomCrop(64, padding=4), 
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5133, 0.4838, 0.4208], [0.2710, 0.2663, 0.2767]),  # mean, std 通过mixup-cifar10-main/compute_animal10n_mean_std.py计算得到
+])
+
+test_animal10n_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize([0.5133, 0.4838, 0.4208], [0.2710, 0.2663, 0.2767]), 
+])
+
 def input_dataset(dataset, noise_type, noise_path, is_human):
     if dataset == 'cifar10':
         train_dataset = CIFAR10(root='~/data/',
@@ -44,6 +58,7 @@ def input_dataset(dataset, noise_type, noise_path, is_human):
                           )
         num_classes = 10
         num_training_samples = 50000
+
     elif dataset == 'cifar100':
         train_dataset = CIFAR100(root='~/data/',
                                 download=True,  
@@ -60,9 +75,25 @@ def input_dataset(dataset, noise_type, noise_path, is_human):
                             )
         num_classes = 100
         num_training_samples = 50000
+    elif dataset == 'animal10n':
+        train_dataset = Animal10N(
+            root='~/data/animal10n',  #下载到与CIFARN相同的地址
+            train=True,
+            transform=train_animal10n_transform,
+            label_pt_path=noise_path
+        )
+        test_dataset = Animal10N(
+            root='~/data/animal10n', # 
+            train=False,
+            transform=test_animal10n_transform,
+            label_pt_path=noise_path
+        )
+        # 这个数据集的类别数 = 10，样本总量等
+        num_classes = 10
+        num_training_samples = len(train_dataset)
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset}")
     return train_dataset, test_dataset, num_classes, num_training_samples
-
-
 
 
 
